@@ -1,0 +1,96 @@
+---
+output:
+  word_document: default
+  html_document: default
+---
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(mice) #package for imputation
+library(VIM) #visualizing missingness
+library(ranger) #for random forests
+library(randomForest) #also for random forests
+library(caret)
+library(skimr)
+library(GGally)
+library(gridExtra)
+library(vip) #variable importance
+```
+
+#Load in the data
+```{r}
+ames = read_csv("ames_student.csv")
+```
+
+#Convert character variables to factors.
+```{r}
+ames_factor <- ames %>% mutate_if(is.character,as.factor)
+```
+
+#Check for missingness
+```{r}
+skim(ames_factor)
+```
+#We have no missing data, and the character variables have now been converted to factors, so the data is clean, which is the first step in the process. Row-wise or column-wise deletion is not necessary, since there is no missing data.
+
+#Split data into training and testing sets
+```{r}
+set.seed(123) 
+ames_split = initial_split(ames_factor, prop = 0.7, strata = Above_Median)
+train = training(ames_split)
+test = testing(ames_split)
+```
+
+#Random forest
+```{r}
+ames_recipe = recipe(Above_Median ~., train) %>%
+  step_dummy(all_nominal(), -all_outcomes())
+
+rf_model = rand_forest() %>% 
+  set_engine("ranger", importance = "permutation") %>% #added importance metric
+  set_mode("classification")
+
+ames_wflow = 
+  workflow() %>% 
+  add_model(rf_model) %>% 
+  add_recipe(ames_recipe)
+
+set.seed(123)
+ames_fit = fit(ames_wflow, train)
+```
+
+#Predictions on training set
+```{r}
+trainpredrf = predict(ames_fit, train)
+head(trainpredrf)
+```
+#Create confusion matrix
+```{r}
+confusionMatrix(trainpredrf$.pred_class, train$Above_Median, 
+                positive = "Yes")
+```
+#We see a predicted accuracy here of 0.9924, which is extremely high.
+
+#Predictions on testing set
+```{r}
+testpredrf = predict(ames_fit, test)
+head(testpredrf)
+confusionMatrix(testpredrf$.pred_class, test$Above_Median, 
+                positive = "Yes")
+```
+#Our testing set has a predicted accuracy of 0.9106, which is still very high since it is above 90%, but still a slight decrease from what we saw with the training set.
+
+#Selecting variables of importance
+```{r}
+ames_fit %>% pull_workflow_fit() %>% vip(geom = "point")
+```
+#We see that our top three most important variables are Gr_Liv_Area, Year_Built, and Garage_Cars. Each of these three are numeric, rather than categorical. Our three least important variables in the graph are Second_Flr_SF, Year_Remod_Add, and Foundation_PConc. Of these, only Foundation_PConc is categorical. We can then further visualize those variables below...
+
+```{r}
+p1 = ggplot(train, aes(x = Above_Median, y = Gr_Liv_Area)) + geom_boxplot()
+p2 = ggplot(train, aes(x = Above_Median, y = Year_Built)) + geom_boxplot()
+p3 = ggplot(train, aes(x = Above_Median, y = Garage_Cars)) + geom_boxplot()
+grid.arrange(p1,p2,p3, ncol = 2)
+```
+#The above boxplots represent that those houses with more above ground living area, a more recent year built, and larger garages have a greater likelihood to be above the median price for the area, which makes sense.
+
